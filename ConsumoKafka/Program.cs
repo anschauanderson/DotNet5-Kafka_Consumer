@@ -1,8 +1,8 @@
-﻿using System;
+﻿using Confluent.Kafka;
+using System;
+using System.IO;
+using System.Text.Json;
 using System.Threading;
-using Confluent.Kafka;
-using Serilog;
-using Serilog.Sinks.SystemConsole.Themes;
 
 namespace ConsumoKafka
 {
@@ -10,34 +10,14 @@ namespace ConsumoKafka
     {
         static void Main(string[] args)
         {
-            var logger = new LoggerConfiguration()
-                .WriteTo.Console(theme: AnsiConsoleTheme.Literate)
-                .CreateLogger();
-            logger.Information("Testando o consumo de mensagens com Kafka");
-
-            if (args.Length != 3)
-            {
-                logger.Error(
-                    "Informe 3 parâmetros: " +
-                    "no primeiro o IP/porta para testes com o Kafka, " +
-                    "no segundo o Topic a ser utilizado no consumo das mensagens, " +
-                    "no terceiro o Group Id da aplicação...");
-                return;
-            }
-
-            string bootstrapServers = args[0];
-            string nomeTopic = args[1];
-            string groupId = args[2];
-
-            logger.Information($"BootstrapServers = {bootstrapServers}");
-            logger.Information($"Topic = {nomeTopic}");
-            logger.Information($"Group Id = {groupId}");
+            string bootstrapServers = "localhost:9092";
+            string topicName = "topic-test";
 
             var config = new ConsumerConfig
             {
                 BootstrapServers = bootstrapServers,
-                GroupId = groupId,
-                AutoOffsetReset = AutoOffsetReset.Earliest
+                GroupId = "teste",
+                AutoOffsetReset = AutoOffsetReset.Latest
             };
 
             CancellationTokenSource cts = new CancellationTokenSource();
@@ -51,28 +31,49 @@ namespace ConsumoKafka
             {
                 using (var consumer = new ConsumerBuilder<Ignore, string>(config).Build())
                 {
-                    consumer.Subscribe(nomeTopic);
+                    consumer.Subscribe(topicName);
 
                     try
                     {
+                        Random random = new Random();
+
                         while (true)
                         {
-                            var cr = consumer.Consume(cts.Token);
-                            logger.Information(
+                            var cr = consumer.Consume(cts.Token);                            
+                            var pacote = JsonSerializer.Deserialize<RastreadorEvent>(cr.Message.Value);
+                            
+                            Thread.Sleep(random.Next(5, 500));
+                            EscreverArquivo($"{pacote.Rastreador}.txt", pacote.Contador);
+
+                            Console.WriteLine(
                                 $"Mensagem lida: {cr.Message.Value}");
                         }
                     }
                     catch (OperationCanceledException)
                     {
                         consumer.Close();
-                        logger.Warning("Cancelada a execução do Consumer...");
+                        Console.WriteLine("Cancelada a execução do Consumer...");
                     }
                 }
             }
             catch (Exception ex)
             {
-                logger.Error($"Exceção: {ex.GetType().FullName} | " +
+                Console.WriteLine($"Exceção: {ex.GetType().FullName} | " +
                              $"Mensagem: {ex.Message}");
+            }
+        }
+        static void EscreverArquivo(string nomeArquivo, int contador)
+        {
+            if (!Directory.Exists("rastreadores"))
+                Directory.CreateDirectory("rastreadores"); ;
+
+            nomeArquivo = $"rastreadores\\{nomeArquivo}";
+            if (!File.Exists(nomeArquivo))
+                using (File.Create(nomeArquivo)) { };
+
+            using (StreamWriter writer = new StreamWriter(nomeArquivo, true))
+            {
+                writer.WriteLine($"{DateTime.Now.ToString("dd/MM/yy HH:mm:ss")} - Contador {contador}");
             }
         }
     }
