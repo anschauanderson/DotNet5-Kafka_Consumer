@@ -1,6 +1,8 @@
 ﻿using Confluent.Kafka;
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 using System.Threading;
 
@@ -17,7 +19,9 @@ namespace ConsumoKafka
             {
                 BootstrapServers = bootstrapServers,
                 GroupId = "teste",
-                AutoOffsetReset = AutoOffsetReset.Latest
+                AutoOffsetReset = AutoOffsetReset.Earliest,
+                EnableAutoCommit = false,
+                SessionTimeoutMs = 10000
             };
 
             CancellationTokenSource cts = new CancellationTokenSource();
@@ -39,14 +43,27 @@ namespace ConsumoKafka
 
                         while (true)
                         {
-                            var cr = consumer.Consume(cts.Token);                            
-                            var pacote = JsonSerializer.Deserialize<RastreadorEvent>(cr.Message.Value);
-                            
-                            Thread.Sleep(random.Next(5, 500));
-                            EscreverArquivo($"{pacote.Rastreador}.txt", pacote.Contador);
+                            var cr = consumer.Consume(cts.Token);
 
                             Console.WriteLine(
                                 $"Mensagem lida: {cr.Message.Value}");
+
+                            var pacote = JsonSerializer.Deserialize<RastreadorEvent>(cr.Message.Value);
+
+                            Thread.Sleep(random.Next(5, 50));
+                            string nomeArquivo = $"rastreadores\\{pacote.Rastreador}.txt";
+                            var escreveu = EscreverArquivo(nomeArquivo, pacote.Contador);
+
+                            try
+                            {
+                                consumer.Commit(cr);
+                            }
+                            catch (KafkaException e)
+                            {
+                                //Implementar Rollback se der erro no commit do offset
+                                if (escreveu)
+                                    ApagarUltimaLinhaArquivo(nomeArquivo);
+                            }
                         }
                     }
                     catch (OperationCanceledException)
@@ -62,18 +79,47 @@ namespace ConsumoKafka
                              $"Mensagem: {ex.Message}");
             }
         }
-        static void EscreverArquivo(string nomeArquivo, int contador)
+        static bool EscreverArquivo(string nomeArquivo, int contador)
         {
             if (!Directory.Exists("rastreadores"))
                 Directory.CreateDirectory("rastreadores"); ;
 
-            nomeArquivo = $"rastreadores\\{nomeArquivo}";
             if (!File.Exists(nomeArquivo))
                 using (File.Create(nomeArquivo)) { };
 
             using (StreamWriter writer = new StreamWriter(nomeArquivo, true))
             {
                 writer.WriteLine($"{DateTime.Now.ToString("dd/MM/yy HH:mm:ss")} - Contador {contador}");
+            }
+
+            return true;
+        }
+
+        static void ApagarUltimaLinhaArquivo(string nomeArquivo)
+        {
+            var lines = new List<string>();
+
+            using (StreamReader reader = new StreamReader(nomeArquivo))
+            {
+                var line = reader.ReadLine();
+
+                while (line != null && line != "")
+                {
+                    lines.Add(line);
+                    line = reader.ReadLine();
+                }
+            }
+
+            File.WriteAllText(nomeArquivo, "");
+
+            var allExceptLast = lines.Take(lines.Count() - 1);
+
+            using (StreamWriter writer = new StreamWriter(nomeArquivo, true))
+            {
+                foreach (var line in allExceptLast)
+                {
+                    writer.WriteLine(line);
+                }
             }
         }
     }
